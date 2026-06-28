@@ -7,4 +7,6 @@
 @load ./ssh
 @load ./ftp
 @load ./weird
+@load ./geo
+@load ./ssl
 @load ./stats

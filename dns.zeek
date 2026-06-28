@@ -31,6 +31,14 @@ export {
         dns_rej_sent: count &default=0 &log;
         ## Count of rejected queries this host received as a client
         dns_rej_rcvd: count &default=0 &log;
+        ## Container for query-name length stats (chars) for names this host looked up
+        dns_qname_len: Netbase::numstats &default=Netbase::numstats();
+        ## Avg/max/min query-name length (chars)
+        dns_qname_len_avg: double &optional &log;
+        dns_qname_len_max: double &optional &log;
+        dns_qname_len_min: double &optional &log;
+        ## Count of TXT-record queries this host made (tunneling signal)
+        dns_txt_queries: count &default=0 &log;
     };
 
     # rcode 0 = NOERROR, 3 = NXDOMAIN
@@ -67,7 +75,13 @@ event DNS::log_dns(rec: DNS::Info)
                 add pkg[orig][[$name="dns_int_rrs", $val=rec$query]];
             else
                 add pkg[orig][[$name="dns_ext_rrs", $val=rec$query]];
+
+            add pkg[orig][[$name="dns_qname_len", $val=cat(|rec$query|)]];
             }
+
+        # qtype 16 = TXT
+        if ( rec?$qtype && rec$qtype == 16 )
+            add pkg[orig][[$name="dns_txt_queries"]];
 
         if ( rec?$rcode && rec$rcode == dns_nxdomain )
             add pkg[orig][[$name="dns_nxdomain_rcvd"]];
@@ -118,6 +132,13 @@ event Netbase::log_observation(obs: observation)
         obs$dns_ext_rr_cnt = |obs$dns_ext_rrs|;
     if ( obs?$dns_int_rrs )
         obs$dns_int_rr_cnt = |obs$dns_int_rrs|;
+
+    if ( obs$dns_qname_len$cnt > 0 )
+        {
+        obs$dns_qname_len_avg = obs$dns_qname_len$avg;
+        obs$dns_qname_len_max = obs$dns_qname_len$max;
+        obs$dns_qname_len_min = obs$dns_qname_len$min;
+        }
     }
 
 # Handler to load DNS observables into the observations table.
@@ -158,6 +179,12 @@ event Netbase::add_observables(ip: addr, obs: set[observable])
                 break;
             case "dns_rej_rcvd":
                 ++observations[ip]$dns_rej_rcvd;
+                break;
+            case "dns_qname_len":
+                observations[ip]$dns_qname_len = Netbase::update_numstats(observations[ip]$dns_qname_len, to_double(o$val));
+                break;
+            case "dns_txt_queries":
+                ++observations[ip]$dns_txt_queries;
                 break;
             }
         }

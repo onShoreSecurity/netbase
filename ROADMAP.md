@@ -5,6 +5,25 @@ framework into one that closes the loop with tuning and detection workflows.
 
 Legend: ✅ done · 🔜 planned · 🧪 needs validation
 
+## Deployment architecture (drives the design)
+
+Netbase runs as **several independent Zeek worker processes load-balanced over the
+same traffic (AF_PACKET fanout), with no cluster**. Implications:
+
+- There is no Broker/proxy tier. Every worker takes the `! Cluster::is_enabled()`
+  path and aggregates its own slice in-process, then writes its own `netbase.log`.
+  Per-host observables for an interval are therefore **split across workers and must
+  be merged downstream** (sum counts, union cardinality sets) — this is unchanged by
+  the work here and already how the deployment consumes the logs.
+- Anything needing a single, consistent cross-worker view — **rolling baselines
+  (Phase 3)** and **beaconing series (Phase 2)** — cannot live in worker memory.
+- The sensor has a **local Redis** instance. That is the shared store. `store.zeek`
+  (✅, opt-in) wraps Zeek 7.2+'s Storage framework Redis backend so each worker opens
+  its own connection to the one Redis dataset. Note: get/put is a plain key→value
+  interface with no atomic list ops, so series that multiple workers append to are
+  designed to avoid read-modify-write races (per-worker keys + aggregation, not
+  shared mutable lists).
+
 ---
 
 ## Phase 0 — Modernize & package ✅
@@ -43,36 +62,57 @@ dropped data.
 - ✅ **stats.zeek** — `CLUSTER_NODE` now falls back to `standalone`.
 - ✅ Removed the orphaned, buggy `utils.zeek` (dead duplicate of `numstats`).
 
-## Phase 2 — Enrich observables 🔜
+## Phase 2 — Enrich observables (worker-local) ✅ / beaconing 🔜
 
-Additive, high-signal fields that detection keys on. Each is independently
-shippable.
+Additive, high-signal fields that detection keys on. The first four aggregate
+downstream exactly like existing observables (no shared state needed) and shipped
+together:
 
-- 🔜 **flow.zeek** — connection **duration** numstats (internal/external) + a
-  long-connection counter over a `&redef` threshold.
-- 🔜 **geo.zeek** (new) — cardinality of unique **countries** and **ASNs** for
-  external peers (`lookup_location` / `lookup_autonomous_system`). Enables
+- ✅ **flow.zeek** — connection **duration** numstats (internal/external,
+  `int_dur_*` / `out_dur_*`) + a `long_conns` counter over the `long_conn_threshold`
+  (`&redef`, default 1h).
+- ✅ **geo.zeek** (new) — cardinality of unique **countries** (`ext_country_cnt`) and
+  **ASNs** (`ext_asn_cnt`) for external peers (`lookup_location` /
+  `lookup_autonomous_system`; degrades to no-op without GeoIP DBs). Enables
   "new country / new ASN" detection in Phase 3.
-- 🔜 **ssl.zeek** (new) — **JA3/JA4** cardinality, **SNI** cardinality, self-signed /
-  validation-failed counts, certificate-age stats.
-- 🔜 **dns.zeek** — query-name length stats, NXDOMAIN ratio, TXT counts (DGA /
-  tunneling signal).
+- ✅ **ssl.zeek** (new) — **SNI** cardinality (`tls_sni_cnt`), deprecated-TLS-version
+  count (`tls_old_version_conns`), and certificate **validation-failure** count
+  (`tls_validation_failures`). Base-only (no JA3/JA4 package dependency).
+- ✅ **dns.zeek** — query-name **length** stats (`dns_qname_len_*`) and **TXT**-query
+  count (`dns_txt_queries`) for DGA / tunneling signal. (NXDOMAIN ratio is derivable
+  downstream from the existing `dns_nxdomain_*` counters.)
+
+Deferred — needs the shared store, so it lands with Phase 3:
+
 - 🔜 **beacon.zeek** (new) — per `(src → dst:port)` inter-arrival regularity
-  (coefficient of variation) to flag periodic beaconing.
+  (coefficient of variation) to flag periodic beaconing. **Cannot** be done per-worker:
+  flow-hash fanout scatters a host's repeat connections across workers, so no single
+  worker sees the full series. Will key per-tuple series in **Redis via `store.zeek`**
+  (per-worker contribution keys to avoid append races), then score periodicity.
   - **Opt-out:** disabled by default behind `Netbase::enable_beaconing = F &redef`.
-  - **Memory controls:** `&redef` caps on tracked tuples per host and samples per
-    tuple, a `&create_expire` idle timeout on the tracking table, and an option to
-    restrict tracking to external destinations only.
+  - **Memory / cost controls:** `&redef` caps on tracked tuples per host and samples
+    per tuple, an idle expiry on the tracking state, an option to restrict tracking to
+    external destinations only, and a Redis-key TTL so abandoned series self-clean.
+
+### JA3/JA4 (optional follow-up)
+TLS fingerprint cardinality (JA3/JA4) is high value but requires the external
+`zeek/ja3` (and JA4) packages. Add as an optional module guarded on those packages so
+the core stays dependency-free.
 
 ## Phase 3 — Detection & tuning integration 🔜
 
 The feedback loop the README describes but never implemented. Ships in
-**learning / suppressed mode by default** so it is safe to deploy.
+**learning / suppressed mode by default** so it is safe to deploy. Built on the
+**Redis shared store** (`store.zeek` ✅) so all parallel workers read/write one
+consistent baseline.
 
-- 🔜 **baseline.zeek** (new) — persistent Broker/SQLite store of running per-host and
-  per-peer-group stats (Welford mean/variance + observed categorical sets: ports,
+- ✅ **store.zeek** (foundation) — opt-in Redis backend wrapper (Zeek 7.2+ Storage
+  framework) giving every worker a connection to the one local Redis dataset.
+- 🔜 **baseline.zeek** (new) — running per-host and per-peer-group stats persisted in
+  Redis via `store.zeek` (Welford mean/variance + observed categorical sets: ports,
   ASNs, software, roles). Exposes `Netbase::is_anomalous(ip, field, value)` and
-  `Netbase::zscore(...)`.
+  `Netbase::zscore(...)`. Cross-worker writes use per-worker keys + periodic merge to
+  avoid read-modify-write races on shared values.
 - 🔜 **detect.zeek** (new) — on `log_observation`, raise Zeek **Notices**:
   - numeric: z-score over a `&redef` threshold (conn counts, ext bytes, durations);
   - categorical "first seen": new external ASN/country, new listening port, new
