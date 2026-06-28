@@ -1,0 +1,24 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  parse-and-test:
+    runs-on: ubuntu-latest
+    container: zeek/zeek:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fail the build on any parse/load error in the package. With no input
+      # interface or trace, Zeek runs zeek_init/zeek_done and exits.
+      - name: Parse-check the Netbase package
+        run: zeek -C .
+
+      # Run the btest smoke test(s). btest ships with the zeek image.
+      - name: Run btests
+        run: |
+          export ZEEKPATH="$(pwd)/..:$(zeek-config --zeekpath)"
+          cd testing
+          btest -d

@@ -44,18 +44,22 @@ export {
         out_to_lowports: count &default=0 &log;            
         ## Count of outbound conns to a recognized service (service field populated)
         out_to_service: count &default=0 &log;             
-        ## Total count of internal conns originated by this host 
-        int_orig_conns: count &default=0 &log;             
+        ## Total count of internal conns originated by this host
+        int_orig_conns: count &default=0 &log;
+        ## Count of internal conns originated by this host that completed successfully (SF)
+        int_succ_conns: count &default=0 &log;
         ## Count of internal conns originated by this host that were rejected
-        int_rej_conns: count &default=0 &log;              
+        int_rej_conns: count &default=0 &log;
         ## Count of internal conns to ports >= 1024
         int_to_highports: count &default=0 &log;           
         ## Count of internal conns to ports < 1024     
         int_to_lowports: count &default=0 &log;            
         ## Count of internal conns to recognized server (service field populated)
         int_to_service: count &default=0 &log;             
-        ## Count of internal conns this IP responded to 
-        int_resp_conns: count &default=0 &log;             
+        ## Count of internal conns this IP responded to
+        int_resp_conns: count &default=0 &log;
+        ## Count of inbound (external -> internal) conns this IP responded to as a server
+        inbound_server_conns: count &default=0 &log;
         ## Sum of bytes sent as originator in internal conns
         int_orig_bytes_sent: count &default=0 &log;        
         ## Sum of bytes received as originator in internal conns 
@@ -186,7 +190,7 @@ function Netbase::get_flow_obs(c: connection, do_orig: bool, do_resp: bool)
                     break;
                 case "REJ":
                     add pkg[orig][[$name="out_rej_conns"]];
-                    fallthrough;                    
+                    break;
                 }
             }
 
@@ -241,11 +245,11 @@ function Netbase::get_flow_obs(c: connection, do_orig: bool, do_resp: bool)
                 switch (c$conn$conn_state)
                     {
                     case "SF":
-                        add pkg[orig][[$name="int_conns"]];
+                        add pkg[orig][[$name="int_succ_conns"]];
                         break;
                     case "REJ":
                         add pkg[orig][[$name="int_rej_conns"]];
-                        fallthrough;
+                        break;
                     }
                 }
              
@@ -262,7 +266,7 @@ function Netbase::get_flow_obs(c: connection, do_orig: bool, do_resp: bool)
     # External -> internal flow?
     else if ( id_matches_direction(c$id, INBOUND) && do_resp )
         {
-        add pkg[resp][[$name="server_conns"]];
+        add pkg[resp][[$name="inbound_server_conns"]];
         add pkg[resp][[$name="ext_clients", $val=cat(orig)]];
         }
 
@@ -440,6 +444,9 @@ event Netbase::add_observables(ip: addr, obs: set[observable])
             case "total_conns":
                 ++observations[ip]$total_conns;
                 break;
+            case "out_orig_conns":
+                ++observations[ip]$out_orig_conns;
+                break;
             case "out_succ_conns":
                 ++observations[ip]$out_succ_conns;
                 break;
@@ -458,6 +465,9 @@ event Netbase::add_observables(ip: addr, obs: set[observable])
             case "int_orig_conns":
                 ++observations[ip]$int_orig_conns;
                 break;
+            case "int_succ_conns":
+                ++observations[ip]$int_succ_conns;
+                break;
             case "int_rej_conns":
                 ++observations[ip]$int_rej_conns;
                 break;
@@ -472,6 +482,9 @@ event Netbase::add_observables(ip: addr, obs: set[observable])
                 break;
             case "int_resp_conns":
                 ++observations[ip]$int_resp_conns;
+                break;
+            case "inbound_server_conns":
+                ++observations[ip]$inbound_server_conns;
                 break;
             case "int_orig_bytes_sent":
                 observations[ip]$int_orig_bytes_sent = observations[ip]$int_orig_bytes_sent + to_count(o$val);

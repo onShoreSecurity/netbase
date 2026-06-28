@@ -31,14 +31,21 @@ event Weird::log_weird(rec: Weird::Info)
 		return;
 		}
 
-    if ( addr_matches_host(orig, LOCAL_HOSTS) )
-            {
-            pkg[orig] = set([$name="weirds_sent"]);
-            }
-    if ( addr_matches_host(orig, LOCAL_HOSTS) )
-            {
-            pkg[resp] = set([$name="weirds_recvd"]);
-            }
+    local do_orig = Netbase::is_monitored(orig);
+    local do_resp = Netbase::is_monitored(resp);
+
+    if ( do_orig )
+        pkg[orig] = set([$name="weirds_sent"]);
+
+    if ( do_resp )
+        pkg[resp] = set([$name="weirds_recvd"]);
+
+    # Deliver the observables (this was missing entirely before).
+    if ( do_orig )
+        Netbase::SEND(orig, pkg[orig]);
+
+    if ( do_resp )
+        Netbase::SEND(resp, pkg[resp]);
     }
 
 # Handler to load observables into the observations table

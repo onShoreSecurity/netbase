@@ -29,19 +29,19 @@ event http_request(c: connection, method: string, original_URI: string, unescape
     switch method
         {
         case "POST":
-            if ( addr_matches_host(orig, LOCAL_HOSTS) )
+            if ( Netbase::is_monitored(orig) )
                 pkg[orig] = set([$name="http_post_sent"]);        
 
-            if ( addr_matches_host(resp, LOCAL_HOSTS) )
+            if ( Netbase::is_monitored(resp) )
                 pkg[resp] = set([$name="http_post_recvd"]);
 
             break;
         case "GET":
             # do something 
-            if ( addr_matches_host(orig, LOCAL_HOSTS) )
+            if ( Netbase::is_monitored(orig) )
                 pkg[orig] = set([$name="http_get_sent"]);        
                 
-            if ( addr_matches_host(resp, LOCAL_HOSTS) )
+            if ( Netbase::is_monitored(resp) )
                 pkg[resp] = set([$name="http_get_recvd"]);
             
             break;
@@ -70,19 +70,19 @@ event http_reply(c: connection, version: string, code: count, reason: string)
     # check for client-generated errors
     if ( /^4/ in cat(code))
         {
-        if ( addr_matches_host(orig, LOCAL_HOSTS) )
+        if ( Netbase::is_monitored(orig) )
                 pkg[orig] = set([$name="http_400_recvd"]);        
 
-        if ( addr_matches_host(resp, LOCAL_HOSTS) )
+        if ( Netbase::is_monitored(resp) )
                 pkg[resp] = set([$name="http_400_sent"]);
         }
     # check for server-side errors
     else if ( /^5/ in cat(code))
         {
-        if ( addr_matches_host(orig, LOCAL_HOSTS) )
+        if ( Netbase::is_monitored(orig) )
                 pkg[orig] = set([$name="http_500_recvd"]);   
 
-        if ( addr_matches_host(resp, LOCAL_HOSTS) )
+        if ( Netbase::is_monitored(resp) )
                 pkg[resp] = set([$name="http_500_sent"]);
         }
 
