@@ -99,28 +99,64 @@ TLS fingerprint cardinality (JA3/JA4) is high value but requires the external
 `zeek/ja3` (and JA4) packages. Add as an optional module guarded on those packages so
 the core stays dependency-free.
 
-## Phase 3 — Detection & tuning integration 🔜
+## Phase 3 — Detection & tuning integration (first-seen ✅ / numeric 🔜)
 
 The feedback loop the README describes but never implemented. Ships in
 **learning / suppressed mode by default** so it is safe to deploy. Built on the
-**Redis shared store** (`store.zeek` ✅) so all parallel workers read/write one
-consistent baseline.
+**Redis shared store** (`store.zeek`) so all parallel workers share one baseline.
+
+All three modules below are **opt-in** — they require a Zeek built with the Redis
+storage backend, so they are deliberately excluded from `__load__.zeek` and from CI.
+Enable on the sensor with:
+
+```
+@load netbase/detect          # pulls in baseline + store
+redef Netbase::learning_mode = F;   # only after the baseline has warmed up
+```
 
 - ✅ **store.zeek** (foundation) — opt-in Redis backend wrapper (Zeek 7.2+ Storage
   framework) giving every worker a connection to the one local Redis dataset.
-- 🔜 **baseline.zeek** (new) — running per-host and per-peer-group stats persisted in
-  Redis via `store.zeek` (Welford mean/variance + observed categorical sets: ports,
-  ASNs, software, roles). Exposes `Netbase::is_anomalous(ip, field, value)` and
-  `Netbase::zscore(...)`. Cross-worker writes use per-worker keys + periodic merge to
-  avoid read-modify-write races on shared values.
-- 🔜 **detect.zeek** (new) — on `log_observation`, raise Zeek **Notices**:
-  - numeric: z-score over a `&redef` threshold (conn counts, ext bytes, durations);
-  - categorical "first seen": new external ASN/country, new listening port, new
-    software version, first-time SMB/RDP/SSH **server** role.
-- 🔜 **Tuning loop** — a `&redef` learning window during which baselines build but
-  Notices stay suppressed, plus an analyst **allowlist** (`approved_observables.tsv`,
-  Input framework) to suppress known-good per host/group. That file is the tuning
-  artifact; combined with Zeek's native Notice suppression.
+- ✅ **baseline.zeek** — Redis-backed **first-seen** state. Uses `Storage::put` with
+  `$overwrite=F`, which is an **atomic test-and-set** (Redis SETNX): exactly one
+  worker wins the race for a given key, so there is no read-modify-write window and
+  a value is reported at most once fleet-wide. Keys carry a `baseline_ttl` (30d
+  default) so stale "normal" ages out, with `refresh_ttl_on_hit` sliding the TTL
+  forward for activity that stays normal.
+- ✅ **detect.zeek** — raises Notices on `log_observation` for first-seen
+  categorical values: `New_External_ASN`, `New_External_Country`,
+  `New_External_Port`, `New_Internal_Port`, `New_Software`. Bounded by
+  `max_checks_per_dimension` (cap is logged via Reporter, never silent).
+- ✅ **Tuning loop** — `learning_mode` (default **T** = populate but never alert)
+  plus a `learning_window` warm-up so a restart does not alert on the world, and a
+  `Netbase::suppressions` allowlist (redef set or a live-reread TSV) accepting
+  `dim=value` globally or `ip|dim=value` per host. That file is the analyst tuning
+  artifact; it composes with Zeek's native Notice suppression via `$identifier`.
+
+### Why numeric anomaly scoring is not in this cut 🔜
+
+Under the no-cluster, AF_PACKET-fanout deployment, **no single worker sees all of a
+host's traffic**, so a worker's `total_conns` / `out_orig_bytes_sent` for an interval
+is a *fraction* of the true value — and the fraction varies with flow-hash
+distribution. Computing a z-score against a per-worker value would score noise and
+generate false positives.
+
+First-seen does not have this problem: it is a set-membership test where a partial
+view can only ever *miss* a value (delaying an alert), never fabricate one.
+
+The numeric path therefore needs a single aggregation point. Options, in preference
+order:
+
+1. **Aggregate downstream** (recommended) — the SIEM/pipeline already merges
+   per-worker `netbase.log` rows; run z-scoring there, where the merged value lives.
+2. **Redis-side merge** — workers write per-worker interval keys
+   (`agg:<metric>:<ip>:<interval>:<worker>`); a single reader sums them per interval
+   and updates the running Welford stats. Avoids the append race because each worker
+   owns its own key.
+
+- 🔜 **beacon.zeek** — deferred for the same reason: flow-hash fanout scatters a
+  host's repeat connections, so inter-arrival series must be reassembled through
+  Redis (per-worker contribution keys, then score periodicity). Keeps the
+  `enable_beaconing = F` opt-out and the per-host/per-tuple caps + TTLs.
 - 🔜 **Peer-group cold-start** — use Phase 1 labels (role/OS) so a new host is scored
   against its peer group until it has its own history.
 - 🔜 **SIEM export** — documented ECS field mapping for `netbase.log` + a JSON
@@ -128,10 +164,23 @@ consistent baseline.
 
 ---
 
+## Validation status
+
+| Area | Status |
+|---|---|
+| Phase 0–2 (default-loaded modules) | ✅ CI green — parse-check + btest on `zeek/zeek:latest` (Zeek 8), merged in PR #1 |
+| `store.zeek`, `baseline.zeek`, `detect.zeek` | 🧪 **Not covered by CI** — the stock Zeek image is built without the Redis storage backend. Needs a first run on a sensor with a Redis-enabled Zeek. |
+
+Specifically worth confirming on first sensor deploy: the Redis backend enum constant
+is referenced as `Storage::STORAGE_BACKEND_REDIS` (registered from C++, not visible in
+the script docs). It is exposed as `Netbase::redis_backend_tag &redef` precisely so it
+can be corrected without editing the module if the name differs on your build.
+
 ## Sequencing
 
 ```
 Phase 0 ─┬─ Phase 1 (correctness)   ← gate: CI green, all modules load
          └─ Phase 2 (enrichment)    ← overlaps; each field independently shippable
                        └─ Phase 3 (detection) ← needs labels (P1) + geo/ssl (P2)
+                                    first-seen ✅ · numeric/beaconing need aggregation
 ```
