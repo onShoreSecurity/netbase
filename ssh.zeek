@@ -21,11 +21,11 @@ event ssh_auth_failed(c: connection)
     local resp = c$id$resp_h;
     local pkg = observables();
 
-    if ( addr_matches_host(orig, LOCAL_HOSTS) )
+    if ( Netbase::is_monitored(orig) )
         {
         pkg[orig] = set([$name="ssh_auth_fail_recvd"]);
         }
-    if ( addr_matches_host(resp, LOCAL_HOSTS) )
+    if ( Netbase::is_monitored(resp) )
         {
         pkg[resp] = set([$name="ssh_auth_fail_sent"]);
         }
@@ -50,11 +50,11 @@ event ssh_auth_successful(c: connection, auth_method_none: bool)
     local resp = c$id$resp_h;
     local pkg = observables();
 
-    if ( addr_matches_host(orig, LOCAL_HOSTS) )
+    if ( Netbase::is_monitored(orig) )
         {
         pkg[orig] = set([$name="ssh_as_client"]);
         }
-    if ( addr_matches_host(resp, LOCAL_HOSTS) )
+    if ( Netbase::is_monitored(resp) )
         {
         pkg[resp] = set([$name="ssh_as_server"]);
         }
@@ -88,10 +88,10 @@ event Netbase::add_observables(ip: addr, obs: set[observable])
                 ++observations[ip]$ssh_auth_fail_sent;
                 break;
             case "ssh_as_client":
-                ++observations[ip]$ssh_auth_fail_recvd;
+                ++observations[ip]$ssh_as_client;
                 break;
             case "ssh_as_server":
-                ++observations[ip]$ssh_auth_fail_sent;
+                ++observations[ip]$ssh_as_server;
                 break;
             }       
         }

@@ -1,0 +1,9 @@
+[package]
+script_dir = .
+description = Netbase (Network Baseliner): a device-centric Zeek framework that turns
+  per-host network activity into quantitative observables for baselining, tuning and
+  anomaly detection.
+tags = zeek, baselining, anomaly detection, profiling, network security monitoring
+test_command = cd testing && btest -d
+depends =
+  zeek >=4.0.0

@@ -11,7 +11,6 @@ export {
         ts: time &log;
         node_id: string &log;
         addr_cnt: count &log;
-        table_size: count &log;
         # addrs: set[addr] &log &optional;
     };
 
@@ -24,12 +23,16 @@ export {
 
 event get_stats()
     {
-    @if ( ! Cluster::is_enabled() || Cluster::local_node_type() == Cluster::PROXY ) 
+    @if ( ! Cluster::is_enabled() || Cluster::local_node_type() == Cluster::PROXY )
+    # CLUSTER_NODE is unset on standalone instances; fall back to a stable label.
+    local node = getenv("CLUSTER_NODE");
+    if ( node == "" )
+        node = "standalone";
+
     local rec = stat_info(
 		$ts = network_time(),
-		$node_id = getenv("CLUSTER_NODE"),
-		$addr_cnt = |Netbase::observations|,
-		$table_size = val_size(Netbase::observations)
+		$node_id = node,
+		$addr_cnt = |Netbase::observations|
 	);
 
 #	rec$addrs = set();
@@ -45,7 +48,7 @@ event get_stats()
     @endif
     }
 
-event bro_init()
+event zeek_init()
 	{
 	event get_stats();
 	Log::create_stream(Netbase_stats::LOG, [$columns=stat_info, $ev=log_stats, $path="netbase_stats"]);

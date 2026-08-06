@@ -44,18 +44,22 @@ export {
         out_to_lowports: count &default=0 &log;            
         ## Count of outbound conns to a recognized service (service field populated)
         out_to_service: count &default=0 &log;             
-        ## Total count of internal conns originated by this host 
-        int_orig_conns: count &default=0 &log;             
+        ## Total count of internal conns originated by this host
+        int_orig_conns: count &default=0 &log;
+        ## Count of internal conns originated by this host that completed successfully (SF)
+        int_succ_conns: count &default=0 &log;
         ## Count of internal conns originated by this host that were rejected
-        int_rej_conns: count &default=0 &log;              
+        int_rej_conns: count &default=0 &log;
         ## Count of internal conns to ports >= 1024
         int_to_highports: count &default=0 &log;           
         ## Count of internal conns to ports < 1024     
         int_to_lowports: count &default=0 &log;            
         ## Count of internal conns to recognized server (service field populated)
         int_to_service: count &default=0 &log;             
-        ## Count of internal conns this IP responded to 
-        int_resp_conns: count &default=0 &log;             
+        ## Count of internal conns this IP responded to
+        int_resp_conns: count &default=0 &log;
+        ## Count of inbound (external -> internal) conns this IP responded to as a server
+        inbound_server_conns: count &default=0 &log;
         ## Sum of bytes sent as originator in internal conns
         int_orig_bytes_sent: count &default=0 &log;        
         ## Sum of bytes received as originator in internal conns 
@@ -132,7 +136,24 @@ export {
         pcr_rdp_max: double &optional &log;
         ## Min pcr for rdp connections
         pcr_rdp_min: double &optional &log;
+        ## Container for internal connection duration stats (seconds)
+        int_dur: Netbase::numstats &default=Netbase::numstats();
+        ## Avg/max/min duration (seconds) of internal conns originated by this host
+        int_dur_avg: double &optional &log;
+        int_dur_max: double &optional &log;
+        int_dur_min: double &optional &log;
+        ## Container for external connection duration stats (seconds)
+        out_dur: Netbase::numstats &default=Netbase::numstats();
+        ## Avg/max/min duration (seconds) of external conns originated by this host
+        out_dur_avg: double &optional &log;
+        out_dur_max: double &optional &log;
+        out_dur_min: double &optional &log;
+        ## Count of conns originated by this host that exceeded long_conn_threshold
+        long_conns: count &default=0 &log;
     };
+
+    ## A connection at or above this duration is counted in long_conns.
+    const long_conn_threshold: interval = 1 hr &redef;
 }
 
 # Function to gather flow stats for IPs in a given connection 
@@ -165,6 +186,13 @@ function Netbase::get_flow_obs(c: connection, do_orig: bool, do_resp: bool)
         add pkg[orig][[$name="ext_hosts", $val=cat(c$id$resp_h)]];
         add pkg[orig][[$name="out_orig_conns"]];
 
+        if ( c?$duration )
+            {
+            add pkg[orig][[$name="out_dur", $val=cat(interval_to_double(c$duration))]];
+            if ( c$duration >= long_conn_threshold )
+                add pkg[orig][[$name="long_conns"]];
+            }
+
         if ( c$orig?$size )
             add pkg[orig][[$name="out_orig_bytes_sent", $val=cat(c$orig$size)]];
             
@@ -186,7 +214,7 @@ function Netbase::get_flow_obs(c: connection, do_orig: bool, do_resp: bool)
                     break;
                 case "REJ":
                     add pkg[orig][[$name="out_rej_conns"]];
-                    fallthrough;                    
+                    break;
                 }
             }
 
@@ -212,6 +240,13 @@ function Netbase::get_flow_obs(c: connection, do_orig: bool, do_resp: bool)
             add pkg[orig][[$name="int_ports", $val=cat(c$id$resp_p)]];
             add pkg[orig][[$name="int_hosts", $val=cat(resp)]];
             add pkg[orig][[$name="int_orig_conns"]];
+
+            if ( c?$duration )
+                {
+                add pkg[orig][[$name="int_dur", $val=cat(interval_to_double(c$duration))]];
+                if ( c$duration >= long_conn_threshold )
+                    add pkg[orig][[$name="long_conns"]];
+                }
 
             if ( c?$service && |c$service| > 0 )
                 add pkg[orig][[$name="int_to_service"]];
@@ -241,11 +276,11 @@ function Netbase::get_flow_obs(c: connection, do_orig: bool, do_resp: bool)
                 switch (c$conn$conn_state)
                     {
                     case "SF":
-                        add pkg[orig][[$name="int_conns"]];
+                        add pkg[orig][[$name="int_succ_conns"]];
                         break;
                     case "REJ":
                         add pkg[orig][[$name="int_rej_conns"]];
-                        fallthrough;
+                        break;
                     }
                 }
              
@@ -262,7 +297,7 @@ function Netbase::get_flow_obs(c: connection, do_orig: bool, do_resp: bool)
     # External -> internal flow?
     else if ( id_matches_direction(c$id, INBOUND) && do_resp )
         {
-        add pkg[resp][[$name="server_conns"]];
+        add pkg[resp][[$name="inbound_server_conns"]];
         add pkg[resp][[$name="ext_clients", $val=cat(orig)]];
         }
 
@@ -390,11 +425,25 @@ event Netbase::log_observation(obs: observation)
         obs$pcr_smb_min = obs$pcr_smb$min;
         }
 
-    if ( obs$pcr_rdp$cnt > 0 ) 
+    if ( obs$pcr_rdp$cnt > 0 )
         {
         obs$pcr_rdp_avg = obs$pcr_rdp$avg;
         obs$pcr_rdp_max = obs$pcr_rdp$max;
         obs$pcr_rdp_min = obs$pcr_rdp$min;
+        }
+
+    if ( obs$int_dur$cnt > 0 )
+        {
+        obs$int_dur_avg = obs$int_dur$avg;
+        obs$int_dur_max = obs$int_dur$max;
+        obs$int_dur_min = obs$int_dur$min;
+        }
+
+    if ( obs$out_dur$cnt > 0 )
+        {
+        obs$out_dur_avg = obs$out_dur$avg;
+        obs$out_dur_max = obs$out_dur$max;
+        obs$out_dur_min = obs$out_dur$min;
         }
     }
 
@@ -440,6 +489,9 @@ event Netbase::add_observables(ip: addr, obs: set[observable])
             case "total_conns":
                 ++observations[ip]$total_conns;
                 break;
+            case "out_orig_conns":
+                ++observations[ip]$out_orig_conns;
+                break;
             case "out_succ_conns":
                 ++observations[ip]$out_succ_conns;
                 break;
@@ -458,6 +510,9 @@ event Netbase::add_observables(ip: addr, obs: set[observable])
             case "int_orig_conns":
                 ++observations[ip]$int_orig_conns;
                 break;
+            case "int_succ_conns":
+                ++observations[ip]$int_succ_conns;
+                break;
             case "int_rej_conns":
                 ++observations[ip]$int_rej_conns;
                 break;
@@ -472,6 +527,9 @@ event Netbase::add_observables(ip: addr, obs: set[observable])
                 break;
             case "int_resp_conns":
                 ++observations[ip]$int_resp_conns;
+                break;
+            case "inbound_server_conns":
+                ++observations[ip]$inbound_server_conns;
                 break;
             case "int_orig_bytes_sent":
                 observations[ip]$int_orig_bytes_sent = observations[ip]$int_orig_bytes_sent + to_count(o$val);
@@ -511,7 +569,16 @@ event Netbase::add_observables(ip: addr, obs: set[observable])
                 break;
             case "pcr_rdp":
                 observations[ip]$pcr_rdp = Netbase::update_numstats(observations[ip]$pcr_rdp, to_double(o$val));
-                break;     
+                break;
+            case "int_dur":
+                observations[ip]$int_dur = Netbase::update_numstats(observations[ip]$int_dur, to_double(o$val));
+                break;
+            case "out_dur":
+                observations[ip]$out_dur = Netbase::update_numstats(observations[ip]$out_dur, to_double(o$val));
+                break;
+            case "long_conns":
+                ++observations[ip]$long_conns;
+                break;
             case "dns_server_conns":
                 ++observations[ip]$dns_server_conns;
                 break;       

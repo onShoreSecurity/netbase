@@ -23,12 +23,12 @@ event ftp_reply(c: connection, code: count, msg: string, cont_resp: bool)
         {
         if ( FTP::parse_ftp_reply_code(code)$x == 5 )
             {
-            if ( addr_matches_host(orig, LOCAL_HOSTS) )
+            if ( Netbase::is_monitored(orig) )
                 {
                 pkg[orig] = set([$name="ftp_failed_auth_attempts"]); 
                 }
 
-            if ( addr_matches_host(resp, LOCAL_HOSTS) )
+            if ( Netbase::is_monitored(resp) )
                 {
                 pkg[resp] = set([$name="ftp_auth_failures"]); 
                 }
